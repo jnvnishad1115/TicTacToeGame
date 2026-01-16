@@ -1733,17 +1733,12 @@ def main():
             await m.reply("🎮 **Owner identified!** Notification system active.")
 
         # Schedule notification after start
-        async def wrapper():
-            # Start client manually if it's not already running
-            if not client.is_connected:
-                await client.start()
-            
-            await startup()
-            # Keep the loop running
-            while True:
-                await asyncio.sleep(3600)
-
-        client.run(wrapper())
+    async def wrapper():
+        await startup()
+        await asyncio.Event().wait()  # keep alive forever
+        
+        client.run(wrapper)
+        
     except KeyboardInterrupt:
         print("\n⛔ Bot interrupted by user.")
     except Exception as e:
