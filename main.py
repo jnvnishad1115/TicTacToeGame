@@ -770,6 +770,7 @@ class BotCore:
             
             "⚔️ **⚔️ BATTLE COMMANDS ⚔️\n"
             "▸ `/newgame` - Start multiplayer duel\n"
+            "▸ `/ai [easy/medium/hard]` - Challenge the AI\n"
             "▸ `/profile` - View your warrior stats\n"
             "▸ `/leaderboard` - See top champions\n"
             "\n"
@@ -1690,47 +1691,65 @@ def main():
     
     # FIXED: Use Pyrogram's native run() with startup coroutine
     async def startup():
+        """Initialize database and background tasks"""
         await db._create_indexes()
         await db._init_global_stats()
         await bot.start_cleanup_task()
-
+        
         print("✅ Bot started successfully!")
-       vprint("📊 Bot is ready for production use.")
+        print("📊 Bot is ready for production use.")
 
-    # Notify owner safely
+        # Notify owner after client is definitely started
+        # The startup() function is called INSIDE the wrapper which is run by client.run()
+        # By this point, the client should be starting or started.
+        for _ in range(20): # Try for 60 seconds
+            await asyncio.sleep(3)
+            # Check if client is started or connected
+            if client.is_connected:
+                try:
+                    await client.send_message(
+                        chat_id=settings.OWNER_ID,
+                        text="🎮 **Bot is online and ready!**"
+                    )
+                    print("✅ Owner notified successfully.")
+                    return
+                except Exception as e:
+                    print(f"⚠️  Could not notify owner: {e}")
+                    return
+        
+        # Final attempt if still not "connected" but maybe working
         try:
             await client.send_message(
                 chat_id=settings.OWNER_ID,
-                text="🎮 **Bot is online and ready!**"
+                text="🎮 **Bot is online and ready! (Final attempt)**"
             )
-            print("✅ Owner notified successfully.")
+            print("✅ Owner notified successfully on final attempt.")
         except Exception as e:
-            print(f"⚠️ Owner notification failed: {e}")
-
-
-def main():
-    # Owner start notifier (MUST be top-level inside main)
-    @client.on_message(
-        filters.private & filters.command("start") & filters.user(settings.OWNER_ID),
-        group=-1
-    )
-    async def owner_start_notifier(c, m):
-        await m.reply("🎮 **Owner identified!** Notification system active.")
-
-
-    async def wrapper():
-        await startup()
-        await asyncio.Event().wait()  # keep bot alive forever
-
+            print(f"⚠️  Final owner notification attempt failed: {e}")
 
     try:
-        client.run(wrapper)
+        # Use client.run() instead of asyncio.run() - this is the KEY FIX
+        @client.on_message(filters.private & filters.command("start") & filters.user(settings.OWNER_ID), group=-1)
+        async def owner_start_notifier(c, m):
+            await m.reply("🎮 **Owner identified!** Notification system active.")
+
+        # Schedule notification after start
+        async def wrapper():
+            # Start client manually if it's not already running
+            if not client.is_connected:
+                await client.start()
+            
+            await startup()
+            # Keep the loop running
+            while True:
+                await asyncio.sleep(3600)
+
+        client.run(wrapper())
     except KeyboardInterrupt:
         print("\n⛔ Bot interrupted by user.")
     except Exception as e:
         print(f"❌ Fatal error: {e}")
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     main()
