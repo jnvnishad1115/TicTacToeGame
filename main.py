@@ -1286,8 +1286,12 @@ class BotCore:
                 if player and player["user_id"] != client.me.id:  
                     await self.db.update_user_stats(player["user_id"], "draw", client)  
       
-        else:  
-            game["current_turn"] = "O" if game["current_turn"] == "X" else "X"  
+        else:
+            game["current_turn"] = "O" if game["current_turn"] == "X" else "X"
+            
+            await self.db.update_game(game["game_id"], {
+                "current_turn": game["current_turn"
+            })  
       
         # ==================== FIXED: Include theme in update ====================
         await self.db.update_game(game["game_id"], {  
@@ -1311,99 +1315,119 @@ class BotCore:
         await query.answer()  
       
         # AI move if needed  
-        if game["state"] == "playing" and game["current_turn"] == game.get("ai_symbol"):  
-            task = asyncio.create_task(self._handle_ai_move(client, query.message, game))
+        if game["state"] == "playing" and game["current_turn"] == game.get("ai_symbol"):
+            fresh_game = await self.db.games.find_one({"game_id": game["game_id"]})
+            task = asyncio.create_task(
+                self._handle_ai_move(client, query.message, fresh_game)
+            )
             self.ai_tasks[game["game_id"]] = task  
   
-    async def _handle_ai_move(self, client: Client, message: Message, game: Dict):  
-        # Notify user that AI is thinking  
-        try:  
-            await message.reply_chat_action(enums.ChatAction.TYPING)  
-        except:  
-            pass  
-          
-        await asyncio.sleep(1.5)  
-      
-        ai_symbol = game["ai_symbol"]  
-        player_symbol = game["player_symbol"]  
-        difficulty = game["ai_difficulty"]  
-      
-        try:
-            row, col = await self.ai_engine.get_move(  
-                game["board"], difficulty, ai_symbol, player_symbol  
-            )  
-      
-            if self.game_engine.make_move(game["board"], row, col, ai_symbol):  
-                game["move_count"] += 1  
-          
-                winner = self.game_engine.check_winner(game["board"])  
-                if winner:  
-                    game["state"] = "finished"  
-                    await self.db.finish_game(game["game_id"], winner, game.get("theme"))  
-              
-                    if winner == game["ai_symbol"]:  
-                        await message.reply(  
-                            f"🤖 **THE MACHINE PREVAILS!** 🤖\n\n"  
-                            f"😈 The AI ({game['ai_difficulty']}) has bested you!\n"  
-                            f"💡 **Tip:** Try a lower difficulty or practice more!\n\n"  
-                            f"🔄 Challenge again when ready!"  
-                        )  
-                    else:  
-                        await message.reply(  
-                            f"🎉 **HUMAN TRIUMPH!** 🎉\n\n"  
-                            f"🏆 **Congratulations!** You defeated the {game['ai_difficulty']} AI!\n"  
-                            f"🌟 Truly impressive!\n\n"  
-                            f"😎 You're becoming a Tic-Tac-Toe master!"  
-                        )  
-                  
-                    player = game["players"]["X"]  
-                    if player and player["user_id"] != self.client.me.id:  
-                        result = "win" if winner != game["ai_symbol"] else "loss"  
-                        await self.db.update_user_stats(player["user_id"], result, self.client)  
-              
-                elif self.game_engine.is_draw(game["board"]):  
-                    game["state"] = "finished"  
-                    await self.db.finish_game(game["game_id"], None, game.get("theme"))  
-              
-                    await message.reply(  
-                        f"🤝 **NO VICTORY, BUT HONOR!** 🤝\n\n"  
-                        f"You fought the {game['ai_difficulty']} AI to a draw!\n"  
-                        f"🎭 Respectable performance!\n\n"  
-                        f"🔥 Try again to secure the win!"  
-                    )  
-              
-                    for player in game["players"].values():  
-                        if player and player["user_id"] != self.client.me.id:  
-                            await self.db.update_user_stats(player["user_id"], "draw", self.client)  
-              
-                else:  
-                    game["current_turn"] = player_symbol  
-          
-                # ==================== FIXED: Include theme in update ====================
-                await self.db.update_game(game["game_id"], {  
-                    "board": game["board"],  
-                    "current_turn": game["current_turn"],  
-                    "state": game["state"],  
-                    "move_count": game["move_count"],  
-                    "theme": game["theme"]  # Ensure theme is persisted
-                })  
-          
-                try:  
-                    await message.edit_reply_markup(  
-                        reply_markup=self.ui.get_game_board(  
-                            game["board"], game["theme"], game["state"],   
-                            game["current_turn"], game["players"]  
-                        )  
-                    )  
-                except MessageNotModified:  
+    async def _handle_ai_move(self, client: Client, message: Message, game: Dict):
+        lock = self.game_locks.setdefault(message.chat.id, asyncio.Lock())
+        async with lock:
+            
+            if not game.get("ai_symbol"):
+                logger.error("AI symbol missing, aborting AI move")
+                return
+
+        # Notify user that AI is thinking
+            try:
+                await message.reply_chat_action(enums.ChatAction.TYPING)
+            except:
+                pass
+
+            await asyncio.sleep(1.5)
+
+            ai_symbol = game["ai_symbol"]
+            player_symbol = game["player_symbol"]
+            difficulty = game["ai_difficulty"]
+
+            try:
+                row, col = await self.ai_engine.get_move(
+                    game["board"],
+                    difficulty,
+                    ai_symbol,
+                    player_symbol
+                )
+            if self.game_engine.make_move(game["board"], row, col, ai_symbol):
+                game["move_count"] += 1
+
+                winner = self.game_engine.check_winner(game["board"])
+
+                if winner:
+                    game["state"] = "finished"
+                    await self.db.finish_game(game["game_id"], winner, game.get("theme"))
+
+                    if winner == ai_symbol:
+                        await message.reply(
+                            f"🤖 **THE MACHINE PREVAILS!** 🤖\n\n"
+                            f"😈 The AI ({difficulty}) has bested you!\n"
+                            f"💡 **Tip:** Try a lower difficulty or practice more!"
+                        )
+                        result = "loss"
+                    else:
+                        await message.reply(
+                            f"🎉 **HUMAN TRIUMPH!** 🎉\n\n"
+                            f"🏆 You defeated the {difficulty} AI!\n"
+                            f"😎 Legendary move!"
+                        )
+                        result = "win"
+
+                    player = game["players"]["X"]
+                    if player and player["user_id"] != client.me.id:
+                        await self.db.update_user_stats(player["user_id"], result, client)
+
+                elif self.game_engine.is_draw(game["board"]):
+                    game["state"] = "finished"
+                    await self.db.finish_game(game["game_id"], None, game.get("theme"))
+
+                    await message.reply(
+                        f"🤝 **DRAW!** 🤝\n\n"
+                        f"You tied with the {difficulty} AI.\n"
+                        f"🔥 Try again for victory!"
+                    )
+
+                    for player in game["players"].values():
+                        if player and player["user_id"] != client.me.id:
+                            await self.db.update_user_stats(player["user_id"], "draw", client)
+
+                else:
+                    # Switch turn back to human
+                    game["current_turn"] = player_symbol
+
+                # Persist game state
+                await self.db.update_game(game["game_id"], {
+                    "board": game["board"],
+                    "current_turn": game["current_turn"],
+                    "state": game["state"],
+                    "move_count": game["move_count"],
+                    "theme": game["theme"]
+                })
+
+                # Update board UI
+                try:
+                    await message.edit_reply_markup(
+                        reply_markup=self.ui.get_game_board(
+                            game["board"],
+                            game["theme"],
+                            game["state"],
+                            game["current_turn"],
+                            game["players"]
+                        )
+                    )
+                except MessageNotModified:
                     pass
+
         except Exception as e:
             logger.error(f"AI move execution error: {e}", exc_info=True)
-            # Ensure player stats are updated even on AI error
+
+            # Fail-safe: count as loss for player
             player = game["players"]["X"]
-            if player and player["user_id"] != self.client.me.id:
-                await self.db.update_user_stats(player["user_id"], "loss", self.client)
+            if player and player["user_id"] != client.me.id:
+                await self.db.update_user_stats(player["user_id"], "loss", client)
+
         finally:
+            # Cleanup AI task
             self.ai_tasks.pop(game["game_id"], None)
   
     async def _handle_join(self, client: Client, query: CallbackQuery):  
