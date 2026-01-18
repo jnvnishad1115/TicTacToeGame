@@ -1323,111 +1323,110 @@ class BotCore:
             self.ai_tasks[game["game_id"]] = task  
   
     async def _handle_ai_move(self, client: Client, message: Message, game: Dict):
+        lock = self.game_locks.setdefault(message.chat.id, asyncio.Lock())
+        async with lock:
 
-    lock = self.game_locks.setdefault(message.chat.id, asyncio.Lock())
-    async with lock:
-
-        if not game.get("ai_symbol"):
-            logger.error("AI symbol missing, aborting AI move")
-            return
+            if not game.get("ai_symbol"):
+                logger.error("AI symbol missing, aborting AI move")
+                return
 
         # Notify user that AI is thinking
-        try:
-            await message.reply_chat_action(enums.ChatAction.TYPING)
-        except:
-            pass
+            try:
+                await message.reply_chat_action(enums.ChatAction.TYPING)
+            except:
+                pass
 
-        await asyncio.sleep(1.5)
+            await asyncio.sleep(1.5)
 
-        ai_symbol = game["ai_symbol"]
-        player_symbol = game["player_symbol"]
-        difficulty = game["ai_difficulty"]
+            ai_symbol = game["ai_symbol"]
+            player_symbol = game["player_symbol"]
+            difficulty = game["ai_difficulty"]
 
-        try:
-            row, col = await self.ai_engine.get_move(
-                game["board"],
-                difficulty,
-                ai_symbol,
-                player_symbol
-            )
+            try:
+                row, col = await self.ai_engine.get_move(
+                    game["board"],
+                    difficulty,
+                    ai_symbol,
+                    player_symbol
+                )
 
-            if self.game_engine.make_move(game["board"], row, col, ai_symbol):
-                game["move_count"] += 1
+                if self.game_engine.make_move(game["board"], row, col, ai_symbol):
+                    game["move_count"] += 1
 
-                winner = self.game_engine.check_winner(game["board"])
+                    winner = self.game_engine.check_winner(game["board"])
 
-                if winner:
-                    game["state"] = "finished"
-                    await self.db.finish_game(game["game_id"], winner, game.get("theme"))
+                    if winner:
+                        game["state"] = "finished"
+                        await self.db.finish_game(game["game_id"], winner, game.get("theme"))
 
-                    if winner == ai_symbol:
-                        await message.reply(
-                            f"🤖 **THE MACHINE PREVAILS!** 🤖\n\n"
-                            f"😈 The AI ({difficulty}) has bested you!\n"
-                            f"💡 **Tip:** Try a lower difficulty or practice more!"
-                        )
-                        result = "loss"
-                    else:
-                        await message.reply(
-                            f"🎉 **HUMAN TRIUMPH!** 🎉\n\n"
-                            f"🏆 You defeated the {difficulty} AI!\n"
-                            f"😎 Legendary move!"
-                        )
-                        result = "win"
+                        if winner == ai_symbol:
+                            await message.reply(
+                                f"🤖 **THE MACHINE PREVAILS!** 🤖\n\n"
+                                f"😈 The AI ({difficulty}) has bested you!\n"
+                                f"💡 **Tip:** Try a lower difficulty or practice more!"
+                            )
+                            result = "loss"
+                        else:
+                            await message.reply(
+                                f"🎉 **HUMAN TRIUMPH!** 🎉\n\n"
+                                f"🏆 You defeated the {difficulty} AI!\n"
+                                f"😎 Legendary move!"
+                            )
+                            result = "win"
 
-                    player = game["players"]["X"]
-                    if player and player["user_id"] != client.me.id:
-                        await self.db.update_user_stats(player["user_id"], result, client)
-
-                elif self.game_engine.is_draw(game["board"]):
-                    game["state"] = "finished"
-                    await self.db.finish_game(game["game_id"], None, game.get("theme"))
-
-                    await message.reply(
-                        f"🤝 **DRAW!** 🤝\n\n"
-                        f"You tied with the {difficulty} AI.\n"
-                        f"🔥 Try again for victory!"
-                    )
-
-                    for player in game["players"].values():
+                        player = game["players"]["X"]
                         if player and player["user_id"] != client.me.id:
-                            await self.db.update_user_stats(player["user_id"], "draw", client)
+                            await self.db.update_user_stats(player["user_id"], result, client)
 
-                else:
-                    game["current_turn"] = player_symbol
+                    elif self.game_engine.is_draw(game["board"]):
+                        game["state"] = "finished"
+                        await self.db.finish_game(game["game_id"], None, game.get("theme"))
+
+                        await message.reply(
+                            f"🤝 **DRAW!** 🤝\n\n"
+                            f"You tied with the {difficulty} AI.\n"
+                            f"🔥 Try again for victory!"
+                        )
+
+                        for player in game["players"].values():
+                            if player and player["user_id"] != client.me.id:
+                                await self.db.update_user_stats(player["user_id"], "draw", client)
+
+                    else:
+                        game["current_turn"] = player_symbol
 
                 # Persist game state
-                await self.db.update_game(game["game_id"], {
-                    "board": game["board"],
-                    "current_turn": game["current_turn"],
-                    "state": game["state"],
-                    "move_count": game["move_count"],
-                    "theme": game["theme"]
-                })
+                    await self.db.update_game(game["game_id"], {
+                        "board": game["board"],
+                        "current_turn": game["current_turn"],
+                        "state": game["state"],
+                        "move_count": game["move_count"],
+                        "theme": game["theme"]
+                    })
 
                 # Update board UI
-                try:
-                    await message.edit_reply_markup(
-                        reply_markup=self.ui.get_game_board(
-                            game["board"],
-                            game["theme"],
-                            game["state"],
-                            game["current_turn"],
-                            game["players"]
+                    try:
+                        await message.edit_reply_markup(
+                            reply_markup=self.ui.get_game_board(
+                                game["board"],
+                                game["theme"],
+                                game["state"],
+                                game["current_turn"],
+                                game["players"]
+                            )
                         )
-                    )
-                except MessageNotModified:
-                    pass
+                    except MessageNotModified:
+                        pass
 
-        except Exception as e:
-            logger.error(f"AI move execution error: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(f"AI move execution error: {e}", exc_info=True)
 
-            player = game["players"]["X"]
-            if player and player["user_id"] != client.me.id:
-                await self.db.update_user_stats(player["user_id"], "loss", client)
+                player = game["players"]["X"]
+                if player and player["user_id"] != client.me.id:
+                    await self.db.update_user_stats(player["user_id"], "loss", client)
 
-        finally:
-            self.ai_tasks.pop(game["game_id"], None)
+            finally:
+                self.ai_tasks.pop(game["game_id"], None)
   
     async def _handle_join(self, client: Client, query: CallbackQuery):  
         user = query.from_user  
